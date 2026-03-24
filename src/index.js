@@ -44,7 +44,7 @@ class Logger {
         if (!Logger.#config.levels.includes(level)) return
 
         const timestamp = Logger.#formatTimestamp()
-        const levelUpper = level.toUpperCase().padEnd(5)
+        const levelUpper = level.toUpperCase()
         const argsStr = Logger.#formatArgs(args)
         const plainLine = `[${timestamp}] (${prefix}) [${levelUpper}] ${argsStr}`
 

@@ -1,6 +1,6 @@
 {
   "name": "imagic-logger",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Structured logging with levels, prefixes, and multi-output support",
   "type": "module",
   "exports": {

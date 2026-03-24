@@ -112,7 +112,7 @@ describe('Console output', () => {
     it('outputs a line containing the log level', () => {
         const lines = captureConsoleLog(() => Logger.log('hello'))
         expect(lines).to.have.lengthOf(1)
-        expect(lines[0]).to.include('[LOG  ]')
+        expect(lines[0]).to.include('[LOG]')
     })
 
     it('outputs a line containing the global prefix', () => {
@@ -129,12 +129,12 @@ describe('Console output', () => {
 
     it('outputs line for each level with correct label', () => {
         const levelLabels = {
-            log: '[LOG  ]',
+            log: '[LOG]',
             debug: '[DEBUG]',
-            info: '[INFO ]',
-            warn: '[WARN ]',
+            info: '[INFO]',
+            warn: '[WARN]',
             error: '[ERROR]',
-            crit: '[CRIT ]',
+            crit: '[CRIT]',
         }
         ALL_LEVELS.forEach((level) => {
             const lines = captureConsoleLog(() => Logger[level]('msg'))
@@ -343,7 +343,7 @@ describe('Colors disabled', () => {
     it('output still contains log content when colors is false', () => {
         const lines = captureConsoleLog(() => Logger.warn('plain output'))
         expect(lines[0]).to.include('plain output')
-        expect(lines[0]).to.include('[WARN ]')
+        expect(lines[0]).to.include('[WARN]')
     })
 })
 
