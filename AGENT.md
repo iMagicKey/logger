@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Static logger class providing structured, leveled logging with ANSI color support, configurable output targets (console and/or file), and per-call prefix overrides.
+Static logger class providing structured, leveled logging with ANSI color support, configurable output targets (console and/or file), per-call prefix overrides, named channels, child loggers, log rotation, and JSON output format.
 
 ## Package
 
@@ -27,6 +27,9 @@ All methods are static. Do not instantiate `Logger`.
   - `logDir` {string} ['./logs'] — directory for log files; auto-created
   - `colors` {boolean} [true] — ANSI colors; only applied when `process.stdout.isTTY`
   - `levels` {Array<string>} [all] — active log levels; calls to inactive levels are silent no-ops
+  - `format` {'text'|'json'} ['text'] — output format; `'json'` outputs JSON lines with ISO 8601 timestamps
+  - `maxFileSize` {number|null} [null] — max file size in bytes before rotation; `null` disables rotation
+  - `maxFiles` {number} [5] — max rotated files to keep per level
 - returns: `void`
 - Call once at app startup before any logging.
 
@@ -61,6 +64,31 @@ All methods are static. Do not instantiate `Logger`.
 
 ---
 
+### `Logger.channel(channelName)`: `object`
+- `channelName` {string} — channel name; file output writes to `{logDir}/{channelName}/`
+- returns: object with all level methods (`log`, `info`, etc.) and `p{level}` methods
+- Channel logs go to a subdirectory, not the main logDir
+
+---
+
+### `Logger.child(prefix)`: `object`
+- `prefix` {string} — bound prefix for all log calls
+- returns: object with all level methods and a `.channel(name)` method
+- Inherits global config (levels, output, etc.)
+
+---
+
+### `Logger.closeFds()`: `Promise<void>`
+- Closes all open file streams and clears internal caches
+- Returns a Promise; await before reading files or on shutdown
+- Safe to call multiple times
+
+### `Logger.flush()`: `Promise<void>`
+- Flushes all buffered data to disk without closing streams
+- Returns a Promise; await when you need to ensure data is written
+
+---
+
 ## Usage Patterns
 
 ### Basic setup
@@ -88,6 +116,47 @@ Logger.perror('HTTP', 'POST /login 401')
 Logger.pdebug('CACHE', 'Miss for key', 'user:42')
 ```
 
+### Named channels
+
+```js
+Logger.channel('payments').info('Transaction completed')
+Logger.channel('auth').pinfo('AUTH', 'Login attempt')
+```
+
+### Child logger
+
+```js
+const httpLog = Logger.child('HTTP')
+httpLog.info('Request received')
+httpLog.channel('access').log('GET /api/users 200')
+```
+
+### JSON output
+
+```js
+Logger.setConfig({ format: 'json' })
+Logger.info('Server started')
+// {"timestamp":"2026-04-08T12:00:00.000Z","level":"info","prefix":"APP","message":"Server started"}
+```
+
+### Log rotation
+
+```js
+Logger.setConfig({
+    output: ['file'],
+    maxFileSize: 10 * 1024 * 1024, // 10MB
+    maxFiles: 5,
+})
+```
+
+### Graceful shutdown
+
+```js
+process.on('beforeExit', async () => {
+    await Logger.closeFds()
+})
+```
+
 ### Production config (no debug)
 
 ```js
@@ -99,24 +168,28 @@ Logger.setConfig({
 })
 ```
 
-### Inspect current config
-
-```js
-const cfg = Logger.getConfig()
-console.log(cfg.levels)
-```
-
 ---
 
 ## Log Line Format
+
+### Text format (default)
 
 ```
 [YYYY-MM-DD HH:mm:ss.SSS] (PREFIX) [LEVEL] message
 ```
 
 - Timestamp is local time with milliseconds.
-- Level label is padded to 5 characters (e.g. `[INFO ]`, `[LOG  ]`).
 - File output never contains ANSI codes.
+
+### JSON format
+
+```json
+{"timestamp":"2026-04-08T12:00:00.000Z","level":"info","prefix":"APP","message":"..."}
+```
+
+- Timestamp is ISO 8601 UTC.
+- `channel` field added only for channel logs.
+- No ANSI codes in JSON mode.
 
 ---
 
@@ -125,12 +198,14 @@ console.log(cfg.levels)
 - `Logger` is a static class — do not use `new Logger()`.
 - `setConfig` merges into the current config; it does not reset fields not mentioned. To change `levels`, pass the full desired array.
 - Colors are suppressed automatically when `process.stdout.isTTY` is falsy (piped output, CI, Docker without TTY) even if `colors: true`.
-- File output is synchronous (`fs.appendFileSync`); this may add latency on slow disks at high log volume.
-- Each level writes to its own file: `log.log`, `debug.log`, `info.log`, `warn.log`, `error.log`, `crit.log`. There is no combined log file.
+- File writes are async (buffered via `WriteStream`). Call `await Logger.closeFds()` or `await Logger.flush()` before reading log files or exiting.
+- Each level writes to its own file: `log.log`, `debug.log`, etc. There is no combined log file.
 - If `logDir` cannot be created (permission error), an OS-level error will be thrown at first file write.
 - Non-string arguments are inspected with depth 4; deeply nested objects beyond that depth appear as `[Object]`.
 - Calling a log method for a level not in `config.levels` is a silent no-op — it will not throw.
 - `crit` is the highest severity level; there is no `fatal` or `emergency` alias.
+- Rotation renames files synchronously (`level.log` → `level.1.log`, etc.). Oldest files beyond `maxFiles` are deleted.
+- JSON format disables ANSI colors regardless of `colors` setting.
 
 ---
 

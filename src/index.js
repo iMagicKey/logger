@@ -9,14 +9,18 @@ const DEFAULT_CONFIG = {
     logDir: './logs',
     colors: true,
     levels: ['log', 'debug', 'error', 'warn', 'info', 'crit'],
+    format: 'text',
+    maxFileSize: null,
+    maxFiles: 5,
 }
 
 const ALL_LEVELS = ['log', 'debug', 'error', 'warn', 'info', 'crit']
 
 class Logger {
     static #config = { ...DEFAULT_CONFIG }
-    static #fds = new Map()
+    static #streams = new Map()
     static #dirCreated = new Set()
+    static #bytesWritten = new Map()
 
     static setConfig(config) {
         Logger.#config = { ...Logger.#config, ...config }
@@ -26,16 +30,23 @@ class Logger {
         return { ...Logger.#config }
     }
 
-    static closeFds() {
-        for (const fd of Logger.#fds.values()) {
-            try {
-                fs.closeSync(fd)
-            } catch {
-                // ignore close errors
-            }
+    static async closeFds() {
+        const promises = []
+        for (const stream of Logger.#streams.values()) {
+            promises.push(new Promise((resolve) => stream.end(resolve)))
         }
-        Logger.#fds.clear()
+        await Promise.all(promises)
+        Logger.#streams.clear()
         Logger.#dirCreated.clear()
+        Logger.#bytesWritten.clear()
+    }
+
+    static async flush() {
+        const promises = []
+        for (const stream of Logger.#streams.values()) {
+            promises.push(new Promise((resolve) => stream.write('', resolve)))
+        }
+        await Promise.all(promises)
     }
 
     static #formatTimestamp() {
@@ -54,73 +65,122 @@ class Logger {
         return args.map((a) => (typeof a === 'string' ? a : util.inspect(a, { depth: 4 }))).join(' ')
     }
 
-    static #getFd(logDir, level) {
+    static #getStream(logDir, level) {
         const filePath = path.join(logDir, `${level}.log`)
-        if (Logger.#fds.has(filePath)) return Logger.#fds.get(filePath)
+        if (Logger.#streams.has(filePath)) return { stream: Logger.#streams.get(filePath), filePath }
 
         if (!Logger.#dirCreated.has(logDir)) {
             fs.mkdirSync(logDir, { recursive: true })
             Logger.#dirCreated.add(logDir)
         }
 
+        // Open sync to ensure file exists immediately (needed for rotation renames)
         const fd = fs.openSync(filePath, 'a')
-        Logger.#fds.set(filePath, fd)
-        return fd
+        const initialSize = fs.fstatSync(fd).size
+        Logger.#bytesWritten.set(filePath, initialSize)
+
+        const stream = fs.createWriteStream(filePath, { fd, autoClose: true })
+        stream.on('error', () => {})
+        Logger.#streams.set(filePath, stream)
+        return { stream, filePath }
     }
 
-    static #write(level, prefix, args) {
-        if (!Logger.#config.levels.includes(level)) return
+    static #rotate(logDir, level) {
+        const basePath = path.join(logDir, `${level}.log`)
+        const stream = Logger.#streams.get(basePath)
+        if (stream) {
+            stream.end()
+            Logger.#streams.delete(basePath)
+        }
 
+        const { maxFiles } = Logger.#config
+        const oldest = path.join(logDir, `${level}.${maxFiles}.log`)
+        try {
+            fs.unlinkSync(oldest)
+        } catch {
+            // ok if doesn't exist
+        }
+
+        for (let i = maxFiles - 1; i >= 1; i--) {
+            const from = path.join(logDir, `${level}.${i}.log`)
+            const to = path.join(logDir, `${level}.${i + 1}.log`)
+            try {
+                fs.renameSync(from, to)
+            } catch {
+                // ok if doesn't exist
+            }
+        }
+
+        try {
+            fs.renameSync(basePath, path.join(logDir, `${level}.1.log`))
+        } catch {
+            // ok if doesn't exist
+        }
+
+        Logger.#bytesWritten.set(basePath, 0)
+    }
+
+    static #formatLine(level, prefix, argsStr, channelName) {
+        if (Logger.#config.format === 'json') {
+            const obj = {
+                timestamp: new Date().toISOString(),
+                level,
+                prefix,
+                message: argsStr,
+            }
+            if (channelName) obj.channel = channelName
+            return JSON.stringify(obj)
+        }
         const timestamp = Logger.#formatTimestamp()
         const levelUpper = level.toUpperCase()
+        return `[${timestamp}] (${prefix}) [${levelUpper}] ${argsStr}`
+    }
+
+    static #write(level, prefix, args, channelName = null) {
+        if (!Logger.#config.levels.includes(level)) return
+
         const argsStr = Logger.#formatArgs(args)
-        const plainLine = `[${timestamp}] (${prefix}) [${levelUpper}] ${argsStr}`
+        const line = Logger.#formatLine(level, prefix, argsStr, channelName)
 
         if (Logger.#config.output.includes('console')) {
-            if (Logger.#config.colors && process.stdout.isTTY) {
+            if (Logger.#config.format === 'json') {
+                console.log(line)
+            } else if (Logger.#config.colors && process.stdout.isTTY) {
                 const color = LEVEL_COLORS[level] || ''
-                console.log(`${color}${plainLine}${COLORS.reset}`)
+                console.log(`${color}${line}${COLORS.reset}`)
             } else {
-                console.log(plainLine)
+                console.log(line)
             }
         }
 
         if (Logger.#config.output.includes('file')) {
-            const logDir = path.resolve(Logger.#config.logDir)
-            const fd = Logger.#getFd(logDir, level)
-            fs.writeSync(fd, `${plainLine}\n`)
-        }
-    }
+            const logDir = channelName ? path.resolve(Logger.#config.logDir, channelName) : path.resolve(Logger.#config.logDir)
+            const data = `${line}\n`
+            const byteLength = Buffer.byteLength(data)
 
-    static #writeChannel(channelName, level, prefix, args) {
-        if (!Logger.#config.levels.includes(level)) return
+            // Ensure stream exists so #bytesWritten is initialized from existing file size
+            Logger.#getStream(logDir, level)
 
-        const timestamp = Logger.#formatTimestamp()
-        const levelUpper = level.toUpperCase()
-        const argsStr = Logger.#formatArgs(args)
-        const plainLine = `[${timestamp}] (${prefix}) [${levelUpper}] ${argsStr}`
-
-        if (Logger.#config.output.includes('console')) {
-            if (Logger.#config.colors && process.stdout.isTTY) {
-                const color = LEVEL_COLORS[level] || ''
-                console.log(`${color}${plainLine}${COLORS.reset}`)
-            } else {
-                console.log(plainLine)
+            if (Logger.#config.maxFileSize) {
+                const filePath = path.join(logDir, `${level}.log`)
+                const currentBytes = Logger.#bytesWritten.get(filePath) || 0
+                if (currentBytes + byteLength > Logger.#config.maxFileSize) {
+                    Logger.#rotate(logDir, level)
+                }
             }
-        }
 
-        if (Logger.#config.output.includes('file')) {
-            const logDir = path.resolve(Logger.#config.logDir, channelName)
-            const fd = Logger.#getFd(logDir, level)
-            fs.writeSync(fd, `${plainLine}\n`)
+            // Get stream again (may be new after rotation)
+            const { stream, filePath } = Logger.#getStream(logDir, level)
+            stream.write(data)
+            Logger.#bytesWritten.set(filePath, (Logger.#bytesWritten.get(filePath) || 0) + byteLength)
         }
     }
 
     static channel(channelName) {
         const bound = {}
         ALL_LEVELS.forEach((level) => {
-            bound[level] = (...args) => Logger.#writeChannel(channelName, level, Logger.getConfig().prefix, args)
-            bound[`p${level}`] = (prefix, ...args) => Logger.#writeChannel(channelName, level, prefix, args)
+            bound[level] = (...args) => Logger.#write(level, Logger.getConfig().prefix, args, channelName)
+            bound[`p${level}`] = (prefix, ...args) => Logger.#write(level, prefix, args, channelName)
         })
         return bound
     }
@@ -128,12 +188,12 @@ class Logger {
     static child(prefix) {
         const bound = {}
         ALL_LEVELS.forEach((level) => {
-            bound[level] = (...args) => Logger._write(level, prefix, args)
+            bound[level] = (...args) => Logger.#write(level, prefix, args)
         })
         bound.channel = (channelName) => {
             const channelBound = {}
             ALL_LEVELS.forEach((level) => {
-                channelBound[level] = (...args) => Logger.#writeChannel(channelName, level, prefix, args)
+                channelBound[level] = (...args) => Logger.#write(level, prefix, args, channelName)
             })
             return channelBound
         }
@@ -144,9 +204,6 @@ class Logger {
         return Logger.#write(level, prefix, args)
     }
 
-    static _writeChannel(channelName, level, prefix, args) {
-        return Logger.#writeChannel(channelName, level, prefix, args)
-    }
 }
 
 ALL_LEVELS.forEach((level) => {
