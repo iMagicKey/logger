@@ -131,3 +131,14 @@ console.log(cfg.levels)
 - Non-string arguments are inspected with depth 4; deeply nested objects beyond that depth appear as `[Object]`.
 - Calling a log method for a level not in `config.levels` is a silent no-op — it will not throw.
 - `crit` is the highest severity level; there is no `fatal` or `emergency` alias.
+
+---
+
+## Knowledge Base
+
+**KB tags for this library:** `imagic-logger, logging`
+
+Before COMPLEX tasks — invoke `knowledge-reader` with tags above + task-specific tags.
+After completing a task — if a reusable pattern, error, or decision emerged, invoke `knowledge-writer` with `source: imagic-logger`.
+
+See `CLAUDE.md` §Knowledge Base Protocol for the full workflow.

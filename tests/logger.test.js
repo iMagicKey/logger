@@ -374,3 +374,105 @@ describe('Output to both console and file', () => {
         expect(content).to.include('dual output')
     })
 })
+
+describe('Named channels', () => {
+    let tmpDir
+    let originalConfig
+
+    beforeEach(() => {
+        originalConfig = Logger.getConfig()
+        Logger.closeFds()
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'imagic-logger-channel-'))
+        Logger.setConfig({ prefix: 'APP', output: ['file'], logDir: tmpDir, colors: false, levels: ALL_LEVELS })
+    })
+
+    afterEach(() => {
+        Logger.closeFds()
+        Logger.setConfig(originalConfig)
+        try {
+            fs.rmSync(tmpDir, { recursive: true, force: true })
+        } catch {
+            // ignore
+        }
+    })
+
+    it('channel writes to a subdirectory named after the channel', () => {
+        Logger.channel('payments').info('tx completed')
+        const content = fs.readFileSync(path.join(tmpDir, 'payments', 'info.log'), 'utf8')
+        expect(content).to.include('tx completed')
+    })
+
+    it('channel uses global prefix by default', () => {
+        Logger.channel('auth').warn('token expired')
+        const content = fs.readFileSync(path.join(tmpDir, 'auth', 'warn.log'), 'utf8')
+        expect(content).to.include('(APP)')
+    })
+
+    it('channel supports p{level} for custom prefix', () => {
+        Logger.channel('auth').pinfo('AUTH', 'login attempt')
+        const content = fs.readFileSync(path.join(tmpDir, 'auth', 'info.log'), 'utf8')
+        expect(content).to.include('(AUTH)')
+    })
+
+    it('channel does not write to main log directory', () => {
+        Logger.channel('payments').error('fail')
+        expect(fs.existsSync(path.join(tmpDir, 'error.log'))).to.equal(false)
+        expect(fs.existsSync(path.join(tmpDir, 'payments', 'error.log'))).to.equal(true)
+    })
+
+    it('multiple channels write to separate directories', () => {
+        Logger.channel('payments').info('pay')
+        Logger.channel('auth').info('login')
+        const payContent = fs.readFileSync(path.join(tmpDir, 'payments', 'info.log'), 'utf8')
+        const authContent = fs.readFileSync(path.join(tmpDir, 'auth', 'info.log'), 'utf8')
+        expect(payContent).to.include('pay')
+        expect(authContent).to.include('login')
+    })
+})
+
+describe('Child logger', () => {
+    let originalConfig
+
+    beforeEach(() => {
+        originalConfig = Logger.getConfig()
+        Logger.setConfig({ output: ['console'], colors: false, levels: ALL_LEVELS })
+    })
+
+    afterEach(() => {
+        Logger.setConfig(originalConfig)
+    })
+
+    it('child logger uses bound prefix', () => {
+        const httpLog = Logger.child('HTTP')
+        const lines = captureConsoleLog(() => httpLog.info('request received'))
+        expect(lines[0]).to.include('(HTTP)')
+    })
+
+    it('child logger does not use global prefix', () => {
+        Logger.setConfig({ prefix: 'GLOBAL' })
+        const httpLog = Logger.child('HTTP')
+        const lines = captureConsoleLog(() => httpLog.log('msg'))
+        expect(lines[0]).to.include('(HTTP)')
+        expect(lines[0]).to.not.include('(GLOBAL)')
+    })
+
+    it('child logger supports all levels', () => {
+        const log = Logger.child('TEST')
+        ALL_LEVELS.forEach((level) => {
+            expect(log[level]).to.be.a('function')
+        })
+    })
+
+    it('child logger can create channel', () => {
+        Logger.closeFds()
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'imagic-logger-child-ch-'))
+        Logger.setConfig({ output: ['file'], logDir: tmpDir })
+        const log = Logger.child('PAY')
+        log.channel('transactions').info('completed')
+        Logger.closeFds()
+        const content = fs.readFileSync(path.join(tmpDir, 'transactions', 'info.log'), 'utf8')
+        expect(content).to.include('(PAY)')
+        expect(content).to.include('completed')
+        fs.rmSync(tmpDir, { recursive: true, force: true })
+    })
+})
