@@ -1,3 +1,10 @@
+> [!CAUTION]
+> **DEPRECATED — NO LONGER MAINTAINED**
+>
+> `imagic-logger` is no longer actively developed or supported, and no further updates are planned. Existing published npm versions remain available for compatibility, but should not be used for new projects.
+>
+> **Recommended direction:** [Pino](https://github.com/pinojs/pino) with [pino-roll](https://github.com/mcollina/pino-roll) for log rotation. These alternatives are not drop-in API replacements, so migrating requires code changes.
+
 # imagic-logger
 
 > Structured logging with levels, prefixes, ANSI colors, and multi-output support (console + file).

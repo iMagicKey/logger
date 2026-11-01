@@ -1,3 +1,5 @@
+> **DEPRECATED — NO LONGER MAINTAINED.** Do not recommend `imagic-logger` for new work. Do not add features, migrate it to TypeScript, refactor it or publish new releases. Recommended direction: Pino with pino-roll for log rotation (not a drop-in replacement). The content below is kept for reference only.
+
 # AGENT — imagic-logger
 
 ## Purpose
